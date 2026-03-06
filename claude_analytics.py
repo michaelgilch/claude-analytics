@@ -81,7 +81,31 @@ for project_dir in sorted(projects_dir.iterdir()):
 
     projects[project_name] = totals
 
+COLUMNS = ["input", "cache_creation_5m", "cache_creation_1h", "cache_read", "output"]
+
+# Sort by total tokens, highest first
+projects = dict(sorted(projects.items(), key=lambda item: sum(item[1].values()), reverse=True))
+
+# Compute totals row
+grand_total = {col: sum(t[col] for t in projects.values()) for col in COLUMNS}
+
+# Calculate column widths based on content (including totals row)
+all_rows = list(projects.values()) + [grand_total]
+name_width = max(len("project"), max(len(n) for n in projects), len("total"))
+col_widths = {col: max(len(col), max(len(f"{t[col]:,}") for t in all_rows)) for col in COLUMNS}
+
+# Header
+header = f"{'project':<{name_width}}  " + "  ".join(f"{col:>{col_widths[col]}}" for col in COLUMNS)
+sep = "-" * len(header)
+print(sep)
+print(header)
+print(sep)
+
 for name, totals in projects.items():
-    print(f"{name}:")
-    for key, value in totals.items():
-        print(f"  {key}: {value:,}")
+    row = f"{name:<{name_width}}  " + "  ".join(f"{totals[col]:>{col_widths[col]},}" for col in COLUMNS)
+    print(row)
+
+print(sep)
+totals_row = f"{'total':<{name_width}}  " + "  ".join(f"{grand_total[col]:>{col_widths[col]},}" for col in COLUMNS)
+print(totals_row)
+print(sep)
