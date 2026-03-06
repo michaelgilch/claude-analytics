@@ -1,27 +1,56 @@
 import json
 from pathlib import Path
 
-# ~/.claude/projects/ contains a subdirectory per Claude Code project. Each 
+# ~/.claude/projects/ contains a subdirectory per Claude Code project. Each
 # directory is name by taking the absolute project path and replacing every /
-# with a -. (/home/michael/myproject becomes -home-michael-myproject). Each 
-# directory holds one or more jsonl files (one per conversation session). Each 
-# line in the jsonl file is a JSON record representing a single message. Each 
-# message may be a user turn or an assistant turn. User turns may include a 
+# with a -. (/home/michael/myproject becomes -home-michael-myproject). Each
+# directory holds one or more jsonl files (one per conversation session). Each
+# line in the jsonl file is a JSON record representing a single message. Each
+# message may be a user turn or an assistant turn. User turns may include a
 # tool call result as content blocks, and assitant turns may include tool calls
 # as content blocks. Assistant turns include a "usage" object with token counts.
 projects_dir = Path.home() / ".claude" / "projects"
 
-totals = {
-    "input":              0,	# Fresh input tokens
-    "cache_creation_5m":  0,	# Tokens written to ephemeral 5m cache
-    "cache_creation_1h":  0,	# Tokens written to ephemeral 1h cache
-    "cache_read":         0,	# Tokens read from cache
-    "output":             0,	# Output tokens
-}
+
+def empty_totals():
+    return {
+        "input":             0,  # Fresh input tokens
+        "cache_creation_5m": 0,  # Tokens written to ephemeral 5m cache
+        "cache_creation_1h": 0,  # Tokens written to ephemeral 1h cache
+        "cache_read":        0,  # Tokens read from cache
+        "output":            0,  # Output tokens
+    }
+
+
+def get_project_name(project_dir):
+	# The cwd (current working directory) contains the projects path. We'll 
+	# use the first recorded cwd for each project as the display name.
+    for jsonl_file in sorted(project_dir.glob("*.jsonl")):
+        with open(jsonl_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cwd = record.get("cwd")
+                if cwd:
+                    return Path(cwd).name
+    # Fall back to the full directory name if no cwd field is found
+    return project_dir.name
+
+
+projects = {}
 
 for project_dir in sorted(projects_dir.iterdir()):
     if not project_dir.is_dir():
         continue
+
+    project_name = get_project_name(project_dir)
+    totals = empty_totals()
+
     for jsonl_file in sorted(project_dir.glob("*.jsonl")):
         with open(jsonl_file, encoding="utf-8") as f:
             for line in f:
@@ -41,14 +70,18 @@ for project_dir in sorted(projects_dir.iterdir()):
                     continue
 
                 usage = record.get("message", {}).get("usage", {})
-                totals["input"]     += usage.get("input_tokens", 0)
-                totals["cache_read"] += usage.get("cache_read_input_tokens", 0)
-                totals["output"]    += usage.get("output_tokens", 0)
+                totals["input"]            += usage.get("input_tokens", 0)
+                totals["cache_read"]       += usage.get("cache_read_input_tokens", 0)
+                totals["output"]           += usage.get("output_tokens", 0)
 
                 # cache_creation is a nested object broken down by cache lifetime (5m vs 1h)
                 cc = usage.get("cache_creation", {})
                 totals["cache_creation_5m"] += cc.get("ephemeral_5m_input_tokens", 0)
                 totals["cache_creation_1h"] += cc.get("ephemeral_1h_input_tokens", 0)
 
-for key, value in totals.items():
-    print(f"{key}: {value:,}")
+    projects[project_name] = totals
+
+for name, totals in projects.items():
+    print(f"{name}:")
+    for key, value in totals.items():
+        print(f"  {key}: {value:,}")
