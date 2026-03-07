@@ -43,51 +43,6 @@ def get_project_name(project_dir):
     return project_dir.name
 
 
-# projects[project_name][model] = token totals
-projects = {}
-
-for project_dir in sorted(projects_dir.iterdir()):
-    if not project_dir.is_dir():
-        continue
-
-    project_name = get_project_name(project_dir)
-    by_model = defaultdict(empty_totals)
-
-    for jsonl_file in sorted(project_dir.glob("*.jsonl")):
-        with open(jsonl_file, encoding="utf-8") as f:
-            for line in f:
-                # Strip whitespace
-                line = line.strip()
-                # Skip blank lines
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    # Skip malformed lines
-                    continue
-
-                # Only assistant turns have token usage
-                if record.get("type") != "assistant":
-                    continue
-
-                model = record.get("message", {}).get("model", "unknown")
-                if model == "<synthetic>":
-                    continue
-                usage = record.get("message", {}).get("usage", {})
-
-                by_model[model]["input"]      += usage.get("input_tokens", 0)
-                by_model[model]["cache_read"] += usage.get("cache_read_input_tokens", 0)
-                by_model[model]["output"]     += usage.get("output_tokens", 0)
-
-                # cache_creation is a nested object broken down by cache lifetime (5m vs 1h)
-                cc = usage.get("cache_creation", {})
-                by_model[model]["cache_creation_5m"] += cc.get("ephemeral_5m_input_tokens", 0)
-                by_model[model]["cache_creation_1h"] += cc.get("ephemeral_1h_input_tokens", 0)
-
-    projects[project_name] = dict(by_model)
-
-
 COLUMNS = ["input", "cache_creation_5m", "cache_creation_1h", "cache_read", "output"]
 
 
@@ -100,38 +55,80 @@ def project_total(by_model):
     return totals
 
 
-# Sort projects by total tokens, highest first
-projects = dict(sorted(projects.items(), key=lambda item: sum(project_total(item[1]).values()), reverse=True))
+def load_projects():
+    # projects[project_name][model] = token totals
+    projects = {}
 
-# Compute grand totals row
-grand_total = empty_totals()
-for by_model in projects.values():
-    for model_totals in by_model.values():
-        for col in COLUMNS:
-            grand_total[col] += model_totals[col]
+    for project_dir in sorted(projects_dir.iterdir()):
+        if not project_dir.is_dir():
+            continue
 
-# Collect all rows (project totals + model rows + grand total) to calculate column widths
-all_value_rows = [grand_total] + [t for by_model in projects.values() for t in by_model.values()]
-all_name_rows = list(projects.keys()) + [m for by_model in projects.values() for m in by_model.keys()] + ["total"]
-name_width = max(len("project"), max(len(n) for n in all_name_rows))
-col_widths = {col: max(len(col), max(len(f"{t[col]:,}") for t in all_value_rows)) for col in COLUMNS}
+        project_name = get_project_name(project_dir)
+        by_model = defaultdict(empty_totals)
 
-# Header
-header = f"{'project':<{name_width}}  " + "  ".join(f"{col:>{col_widths[col]}}" for col in COLUMNS)
-sep = "-" * len(header)
-print(sep)
-print(header)
-print(sep)
+        for jsonl_file in sorted(project_dir.glob("*.jsonl")):
+            with open(jsonl_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
-for project_name, by_model in projects.items():
-    proj_total = project_total(by_model)
-    # Print project total row
-    print(f"{project_name:<{name_width}}  " + "  ".join(f"{proj_total[col]:>{col_widths[col]},}" for col in COLUMNS))
-    # Print one sub-row per model, indented
-    for model, totals in sorted(by_model.items()):
-        label = f"  {model}"
-        print(f"{label:<{name_width}}  " + "  ".join(f"{totals[col]:>{col_widths[col]},}" for col in COLUMNS))
+                    if record.get("type") != "assistant":
+                        continue
 
-print(sep)
-print(f"{'total':<{name_width}}  " + "  ".join(f"{grand_total[col]:>{col_widths[col]},}" for col in COLUMNS))
-print(sep)
+                    model = record.get("message", {}).get("model", "unknown")
+                    if model == "<synthetic>":
+                        continue
+                    usage = record.get("message", {}).get("usage", {})
+
+                    by_model[model]["input"]      += usage.get("input_tokens", 0)
+                    by_model[model]["cache_read"] += usage.get("cache_read_input_tokens", 0)
+                    by_model[model]["output"]     += usage.get("output_tokens", 0)
+
+                    cc = usage.get("cache_creation", {})
+                    by_model[model]["cache_creation_5m"] += cc.get("ephemeral_5m_input_tokens", 0)
+                    by_model[model]["cache_creation_1h"] += cc.get("ephemeral_1h_input_tokens", 0)
+
+        projects[project_name] = dict(by_model)
+
+    return dict(sorted(projects.items(), key=lambda item: sum(project_total(item[1]).values()), reverse=True))
+
+
+def main():
+    projects = load_projects()
+
+    grand_total = empty_totals()
+    for by_model in projects.values():
+        for model_totals in by_model.values():
+            for col in COLUMNS:
+                grand_total[col] += model_totals[col]
+
+    all_value_rows = [grand_total] + [t for by_model in projects.values() for t in by_model.values()]
+    all_name_rows = list(projects.keys()) + [m for by_model in projects.values() for m in by_model.keys()] + ["total"]
+    name_width = max(len("project"), max(len(n) for n in all_name_rows))
+    col_widths = {col: max(len(col), max(len(f"{t[col]:,}") for t in all_value_rows)) for col in COLUMNS}
+
+    header = f"{'project':<{name_width}}  " + "  ".join(f"{col:>{col_widths[col]}}" for col in COLUMNS)
+    sep = "-" * len(header)
+    print(sep)
+    print(header)
+    print(sep)
+
+    for project_name, by_model in projects.items():
+        proj_total = project_total(by_model)
+        print(f"{project_name:<{name_width}}  " + "  ".join(f"{proj_total[col]:>{col_widths[col]},}" for col in COLUMNS))
+        for model, totals in sorted(by_model.items()):
+            label = f"  {model}"
+            print(f"{label:<{name_width}}  " + "  ".join(f"{totals[col]:>{col_widths[col]},}" for col in COLUMNS))
+
+    print(sep)
+    print(f"{'total':<{name_width}}  " + "  ".join(f"{grand_total[col]:>{col_widths[col]},}" for col in COLUMNS))
+    print(sep)
+
+
+if __name__ == "__main__":
+    main()

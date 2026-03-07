@@ -1,0 +1,17 @@
+[project]
+name = "claude-analytics"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "textual>=8.0.2",
+]
+[tool.uv]
+package = true
+
+[tool.setuptools]
+py-modules = ["claude_analytics"]
+
+[project.scripts]
+claude-analytics = "claude_analytics:main"
