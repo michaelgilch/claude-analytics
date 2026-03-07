@@ -2,6 +2,10 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+from textual.app import App, ComposeResult
+from textual.widgets import Header, Footer, ListView, ListItem, Label, DataTable
+from textual.containers import Horizontal, Vertical
+
 # ~/.claude/projects/ contains a subdirectory per Claude Code project. Each
 # directory is name by taking the absolute project path and replacing every /
 # with a -. (/home/michael/myproject becomes -home-michael-myproject). Each
@@ -98,36 +102,81 @@ def load_projects():
     return dict(sorted(projects.items(), key=lambda item: sum(project_total(item[1]).values()), reverse=True))
 
 
-def main():
-    projects = load_projects()
+COL_LABELS = {
+    "input":             "Input",
+    "cache_creation_5m": "Cache Write 5m",
+    "cache_creation_1h": "Cache Write 1h",
+    "cache_read":        "Cache Read",
+    "output":            "Output",
+}
 
-    grand_total = empty_totals()
-    for by_model in projects.values():
-        for model_totals in by_model.values():
-            for col in COLUMNS:
-                grand_total[col] += model_totals[col]
 
-    all_value_rows = [grand_total] + [t for by_model in projects.values() for t in by_model.values()]
-    all_name_rows = list(projects.keys()) + [m for by_model in projects.values() for m in by_model.keys()] + ["total"]
-    name_width = max(len("project"), max(len(n) for n in all_name_rows))
-    col_widths = {col: max(len(col), max(len(f"{t[col]:,}") for t in all_value_rows)) for col in COLUMNS}
+class ClaudeAnalyticsApp(App):
+    CSS = """
+    Horizontal {
+        height: 1fr;
+    }
+    #projects-pane {
+        width: 30;
+        border: solid $primary-darken-2;
+    }
+    #projects-pane ListView {
+        height: 1fr;
+    }
+    #detail-pane {
+        width: 1fr;
+        border: solid $primary-darken-2;
+        padding: 0 1;
+    }
+    """
+    BINDINGS = [("q", "quit", "Quit")]
 
-    header = f"{'project':<{name_width}}  " + "  ".join(f"{col:>{col_widths[col]}}" for col in COLUMNS)
-    sep = "-" * len(header)
-    print(sep)
-    print(header)
-    print(sep)
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Horizontal():
+            with Vertical(id="projects-pane"):
+                yield Label(" Projects", id="projects-label")
+                yield ListView(id="project-list")
+            with Vertical(id="detail-pane"):
+                yield DataTable(id="model-table")
+        yield Footer()
 
-    for project_name, by_model in projects.items():
-        proj_total = project_total(by_model)
-        print(f"{project_name:<{name_width}}  " + "  ".join(f"{proj_total[col]:>{col_widths[col]},}" for col in COLUMNS))
+    def on_mount(self) -> None:
+        self.projects = load_projects()
+        self.project_names = list(self.projects.keys())
+
+        project_list = self.query_one("#project-list", ListView)
+        for name in self.project_names:
+            project_list.append(ListItem(Label(name)))
+
+        table = self.query_one("#model-table", DataTable)
+        table.add_columns("Model", *COL_LABELS.values())
+        table.cursor_type = "row"
+
+        if self.project_names:
+            self._show_project(self.project_names[0])
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        idx = event.list_view.index
+        if idx is not None and idx < len(self.project_names):
+            self._show_project(self.project_names[idx])
+
+    def _show_project(self, project_name: str) -> None:
+        table = self.query_one("#model-table", DataTable)
+        table.clear()
+        self.title = f"Claude Analytics — {project_name}"
+
+        by_model = self.projects[project_name]
         for model, totals in sorted(by_model.items()):
-            label = f"  {model}"
-            print(f"{label:<{name_width}}  " + "  ".join(f"{totals[col]:>{col_widths[col]},}" for col in COLUMNS))
+            table.add_row(model, *[f"{totals[col]:,}" for col in COLUMNS])
 
-    print(sep)
-    print(f"{'total':<{name_width}}  " + "  ".join(f"{grand_total[col]:>{col_widths[col]},}" for col in COLUMNS))
-    print(sep)
+        if len(by_model) > 1:
+            proj_total = project_total(by_model)
+            table.add_row("TOTAL", *[f"{proj_total[col]:,}" for col in COLUMNS])
+
+
+def main():
+    ClaudeAnalyticsApp().run()
 
 
 if __name__ == "__main__":
