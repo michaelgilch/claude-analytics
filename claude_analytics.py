@@ -2,6 +2,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, ListView, ListItem, Label, DataTable
 from textual.containers import Horizontal, Vertical
@@ -102,13 +103,27 @@ def load_projects():
     return dict(sorted(projects.items(), key=lambda item: sum(project_total(item[1]).values()), reverse=True))
 
 
-COL_LABELS = {
-    "input":             "Input",
-    "cache_creation_5m": "Cache Write 5m",
-    "cache_creation_1h": "Cache Write 1h",
-    "cache_read":        "Cache Read",
-    "output":            "Output",
-}
+def _bold(text: str) -> Text:
+    return Text(text, style="bold")
+
+
+def _total_input(totals: dict) -> int:
+    return (
+        totals["input"]
+        + totals["cache_creation_5m"]
+        + totals["cache_creation_1h"]
+        + totals["cache_read"]
+    )
+
+
+DETAIL_FIELDS = [
+    ("Fresh Input",    "input"),
+    ("Cache Write 5m", "cache_creation_5m"),
+    ("Cache Write 1h", "cache_creation_1h"),
+    ("Cache Read",     "cache_read"),
+    ("Total Input",    None),
+    ("Output",         "output"),
+]
 
 
 class ClaudeAnalyticsApp(App):
@@ -123,7 +138,12 @@ class ClaudeAnalyticsApp(App):
     #projects-pane ListView {
         height: 1fr;
     }
-    #detail-pane {
+    #model-pane {
+        width: 50;
+        border: solid $primary-darken-2;
+        padding: 0 1;
+    }
+    #breakdown-pane {
         width: 1fr;
         border: solid $primary-darken-2;
         padding: 0 1;
@@ -141,17 +161,25 @@ class ClaudeAnalyticsApp(App):
             with Vertical(id="projects-pane"):
                 yield Label(" Projects", id="projects-label")
                 yield ListView(id="project-list")
-            with Vertical(id="detail-pane"):
+            with Vertical(id="model-pane"):
                 yield DataTable(id="model-table")
+            with Vertical(id="breakdown-pane"):
+                yield DataTable(id="breakdown-table")
         yield Footer()
 
     def on_mount(self) -> None:
         self.projects = load_projects()
         self._sort = "name"
+        self._current_by_model: dict = {}
 
-        table = self.query_one("#model-table", DataTable)
-        table.add_columns("Model", *COL_LABELS.values())
-        table.cursor_type = "row"
+        model_table = self.query_one("#model-table", DataTable)
+        model_table.add_columns("Model", "Input", "Output", "Cost")
+        model_table.cursor_type = "row"
+
+        breakdown_table = self.query_one("#breakdown-table", DataTable)
+        breakdown_table.add_columns("Field", "Tokens")
+        breakdown_table.cursor_type = "none"
+        breakdown_table.show_header = True
 
         self._rebuild_list()
 
@@ -207,12 +235,49 @@ class ClaudeAnalyticsApp(App):
         self.title = f"Claude Analytics — {project_name}"
 
         by_model = self.projects[project_name]
+        self._current_by_model = by_model
+
         for model, totals in sorted(by_model.items()):
-            table.add_row(model, *[f"{totals[col]:,}" for col in COLUMNS])
+            table.add_row(
+                model,
+                f"{_total_input(totals):,}",
+                f"{totals['output']:,}",
+                "$0.00",
+                key=model,
+            )
 
         if len(by_model) > 1:
-            proj_total = project_total(by_model)
-            table.add_row("TOTAL", *[f"{proj_total[col]:,}" for col in COLUMNS])
+            table.add_row(
+                _bold("TOTAL"),
+                f"{_total_input(project_total(by_model)):,}",
+                f"{project_total(by_model)['output']:,}",
+                "$0.00",
+                key="__total__",
+            )
+
+        self.query_one("#breakdown-table", DataTable).clear()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.data_table.id != "model-table":
+            return
+        key = event.row_key.value if event.row_key else None
+        if key is None:
+            return
+
+        if key == "__total__":
+            totals = project_total(self._current_by_model)
+        else:
+            totals = self._current_by_model.get(key)
+
+        if totals:
+            self._show_breakdown(totals)
+
+    def _show_breakdown(self, totals: dict) -> None:
+        table = self.query_one("#breakdown-table", DataTable)
+        table.clear()
+        for label, field in DETAIL_FIELDS:
+            value = _total_input(totals) if field is None else totals[field]
+            table.add_row(label, f"{value:,}")
 
 
 def main():
