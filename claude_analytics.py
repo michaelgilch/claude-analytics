@@ -129,7 +129,11 @@ class ClaudeAnalyticsApp(App):
         padding: 0 1;
     }
     """
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [
+        ("n", "sort_name", "Sort: Name"),
+        ("t", "sort_tokens", "Sort: Tokens"),
+        ("q", "quit", "Quit"),
+    ]
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -143,18 +147,54 @@ class ClaudeAnalyticsApp(App):
 
     def on_mount(self) -> None:
         self.projects = load_projects()
-        self.project_names = list(self.projects.keys())
-
-        project_list = self.query_one("#project-list", ListView)
-        for name in self.project_names:
-            project_list.append(ListItem(Label(name)))
+        self._sort = "name"
 
         table = self.query_one("#model-table", DataTable)
         table.add_columns("Model", *COL_LABELS.values())
         table.cursor_type = "row"
 
-        if self.project_names:
+        self._rebuild_list()
+
+    def _sorted_names(self) -> list[str]:
+        if self._sort == "name":
+            return sorted(self.projects.keys())
+        return sorted(
+            self.projects.keys(),
+            key=lambda n: sum(project_total(self.projects[n]).values()),
+            reverse=True,
+        )
+
+    def _rebuild_list(self, keep_selected: str | None = None) -> None:
+        self.project_names = self._sorted_names()
+        project_list = self.query_one("#project-list", ListView)
+        project_list.clear()
+        for name in self.project_names:
+            project_list.append(ListItem(Label(name)))
+
+        if keep_selected and keep_selected in self.project_names:
+            idx = self.project_names.index(keep_selected)
+            project_list.index = idx
+            self._show_project(keep_selected)
+        elif self.project_names:
             self._show_project(self.project_names[0])
+
+    def action_sort_name(self) -> None:
+        if self._sort != "name":
+            current = self._current_project()
+            self._sort = "name"
+            self._rebuild_list(keep_selected=current)
+
+    def action_sort_tokens(self) -> None:
+        if self._sort != "tokens":
+            current = self._current_project()
+            self._sort = "tokens"
+            self._rebuild_list(keep_selected=current)
+
+    def _current_project(self) -> str | None:
+        idx = self.query_one("#project-list", ListView).index
+        if idx is not None and idx < len(self.project_names):
+            return self.project_names[idx]
+        return None
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         idx = event.list_view.index
